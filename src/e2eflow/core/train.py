@@ -113,7 +113,7 @@ class Trainer():
         self.devices = devices or '/gpu:0'
         self.shared_device = devices[0] if len(devices) == 1 else '/cpu:0'
 
-    def run(self, min_iter, max_iter):
+    def run(self, min_iter, max_iter, global_step_=None):
         """Train (at most) from min_iter + 1 to max_iter.
         If checkpoints are found in ckpt_dir,
         they must be have a global_step within [min_iter, max_iter]. In this case,
@@ -138,7 +138,7 @@ class Trainer():
 
         assert (max_iter - start_iter + 1) % save_interval == 0
         for i in range(start_iter, max_iter + 1, save_interval):
-            self.train(i, i + save_interval - 1, i - (min_iter + 1))
+            self.train(i, i + save_interval - 1, i - (min_iter + 1), global_step_)
             self.eval(1)
 
         if self.plot_proc:
@@ -184,7 +184,7 @@ class Trainer():
 
         return train_op, loss_
 
-    def train(self, start_iter, max_iter, iter_offset):
+    def train(self, start_iter, max_iter, iter_offset, global_step_ = None):
         ckpt = tf.train.get_checkpoint_state(self.ckpt_dir)
 
         with tf.Graph().as_default(), tf.device(self.shared_device):
@@ -194,7 +194,8 @@ class Trainer():
                 learning_rate_ = util.summarized_placeholder('learning_rate', 'train')
                 summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
 
-            global_step_ = tf.placeholder(tf.int32, name="global_step")
+            if global_step_ == None:
+                global_step_ = tf.placeholder(tf.int32, name="global_step")
 
             train_op, loss_ = self.get_train_and_loss_ops(batch, learning_rate_, global_step_)
 

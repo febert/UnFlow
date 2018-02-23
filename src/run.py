@@ -1,6 +1,6 @@
 import os
 import copy
-
+import numpy as np
 import tensorflow as tf
 from tensorflow.python.client import device_lib
 
@@ -8,15 +8,16 @@ from e2eflow.core.train import Trainer
 from e2eflow.experiment import Experiment
 from e2eflow.util import convert_input_strings
 
-from e2eflow.kitti.input import KITTIInput
-from e2eflow.kitti.data import KITTIData
+from e2eflow.cartgripper.sel_images import sel_images
+
+# from e2eflow.kitti.input import KITTIInput
+# from e2eflow.kitti.data import KITTIData
 from e2eflow.chairs.data import ChairsData
 from e2eflow.chairs.input import ChairsInput
-from e2eflow.sintel.data import SintelData
-from e2eflow.sintel.input import SintelInput
-from e2eflow.synthia.data import SynthiaData
-from e2eflow.cityscapes.data import CityscapesData
-
+# from e2eflow.sintel.data import SintelData
+# from e2eflow.sintel.input import SintelInput
+# from e2eflow.synthia.data import SynthiaData
+# from e2eflow.cityscapes.data import CityscapesData
 
 tf.app.flags.DEFINE_string('ex', 'default',
                            'Name of the experiment.'
@@ -47,17 +48,19 @@ def main(argv=None):
         os.environ['CUDA_VISIBLE_DEVICES'] = gpu_list_param
     gpu_batch_size = int(run_config['batch_size'] / max(len(gpu_list), 1))
     devices = ['/gpu:' + str(gpu_num) for gpu_num in gpu_list]
+    from tensorflow.python.client import device_lib
+    print('using device ', device_lib.list_local_devices())
 
     train_dataset = run_config.get('dataset', 'kitti')
 
-    kdata = KITTIData(data_dir=dirs['data'],
-                      fast_dir=dirs.get('fast'),
-                      stat_log_dir=None,
-                      development=run_config['development'])
-    einput = KITTIInput(data=kdata,
-                        batch_size=1,
-                        normalize=False,
-                        dims=(384, 1280))
+    # kdata = KITTIData(data_dir=dirs['data'],
+    #                   fast_dir=dirs.get('fast'),
+    #                   stat_log_dir=None,
+    #                   development=run_config['development'])
+    # einput = KITTIInput(data=kdata,
+    #                     batch_size=1,
+    #                     normalize=False,
+    #                     dims=(384, 1280))
 
     if train_dataset == 'chairs':
         cconfig = copy.deepcopy(experiment.config['train'])
@@ -195,6 +198,58 @@ def main(argv=None):
               interactive_plot=run_config.get('interactive_plot'),
               devices=devices)
         tr.run(0, ftiters)
+
+    elif train_dataset == 'cartgripper':
+        cconfig = copy.deepcopy(experiment.config['train'])
+        cconfig.update(experiment.config['cartgripper'])
+        convert_input_strings(cconfig, dirs)
+        citers = cconfig.get('num_iters', 0)
+
+        from e2eflow.cartgripper.read_tf_records2 import build_tfrecord_input
+
+        conf = {}
+        DATA_DIR = os.environ['VMPC_DATA_DIR'] + '/cartgripper_startgoal_large4step/train'
+        conf['data_dir'] = DATA_DIR  # 'directory containing data_files.' ,
+        conf['skip_frame'] = 1
+        conf['train_val_split'] = 0.95
+        conf['sequence_length'] = 4  # 48      # 'sequence length, including context frames.'
+        conf['batch_size'] = experiment.config['run']['batch_size']
+        conf['context_frames'] = 2
+        conf['image_only'] = ''
+        conf['orig_size'] = [480, 640]
+        conf['visualize'] = False
+
+        # global_step_ = tf.placeholder(tf.int32, name="global_step")
+        # train_im = sel_images(train_image, global_step_, citers, 4)
+        # val_im = sel_images(val_image, global_step_, citers, 4)
+
+        def make_train(iter_offset):
+            train_image = build_tfrecord_input(conf, training=True)
+            use_size = tf.constant([384, 512])
+            im0 = tf.image.resize_images(train_image[:,0], use_size, method=tf.image.ResizeMethod.BILINEAR)
+            im1 = tf.image.resize_images(train_image[:,1], use_size, method=tf.image.ResizeMethod.BILINEAR)
+            return [im0, im1]
+        def make_val(iter_offset):
+            val_image = build_tfrecord_input(conf, training=False)
+            use_size = tf.constant([384, 512])
+            val_image = tf.image.resize_images(val_image, use_size, method=tf.image.ResizeMethod.BILINEAR)
+            im0 = tf.image.resize_images(val_image[:, 0], use_size, method=tf.image.ResizeMethod.BILINEAR)
+            im1 = tf.image.resize_images(val_image[:, 1], use_size, method=tf.image.ResizeMethod.BILINEAR)
+            return [im0, im1]
+
+        tr = Trainer(
+            make_train,
+            make_val,
+            params=cconfig,
+            normalization=[np.array([0., 0., 0.], dtype=np.float32), 1.],  #TODO: try with normalizeation
+            train_summaries_dir=experiment.train_dir,
+            eval_summaries_dir=experiment.eval_dir,
+            experiment=FLAGS.ex,
+            ckpt_dir=experiment.save_dir,
+            debug=FLAGS.debug,
+            interactive_plot=run_config.get('interactive_plot'),
+            devices=devices)
+        tr.run(0, citers)
 
     else:
       raise ValueError(
